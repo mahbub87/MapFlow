@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <title>PathFinder</title>
+    <script>
+        function sendCity(city) {
+            fetch('/get_city', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({city: city})
+            }).then(response => {
+                // Handle response if needed
+            }).catch(error => {
+                console.error('Error:', error);
+            });
+        }
+    </script>
+</head>
+<body>
+    <div class="titleWrap">
+        <h1><a href="{{ url_for('index') }}">PathFinder</a></h1>
+    </div>
+    <div class="cityButtons">
+        <button class="CButton" onclick="sendCity('Rome')">Rome</button>
+        <button class="CButton" onclick="sendCity('Chicago')">Chicago</button>
+        <button class="CButton" onclick="sendCity('Cairo')">Cairo</button>
+        <button class="CButton" onclick="sendCity('Berlin')">Berlin</button>
+        <button class="CButton" onclick="sendCity('Paris')">Paris</button>
+        <button class="CButton" onclick="sendCity('Dhaka')">Dhaka</button>
+    </div>
+</body>
+</html>
