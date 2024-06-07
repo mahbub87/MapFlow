@@ -1,7 +1,9 @@
 from flask import Flask, render_template, request
-import joblib
 import os
+
+from data import osm_data
 from graph_structure import visualize_graph
+from graph_structure.Graph import Graph
 from graph_structure.osm_to_graph import create_graph_from_shapefiles
 
 app = Flask(__name__)
@@ -21,14 +23,21 @@ def get_city():
             country = 'Germany'
         case 'Paris':
             country = 'France'
-        case 'Dhaka':
+        case 'Dhaka Metropolitan':
             country = 'Bangladesh'
 
     #osm_data.get_osm_data(city, country)
     print(city)
-    g = create_graph_from_shapefiles(city)
+    #g = create_graph_from_shapefiles(city)
+    directory = r"C:\Users\shafi\PycharmProjects\PathFinder\data" + "\\"
+    city_directory = os.path.join(directory, city)
+    file_name = 'graph.json'
+    file_path = os.path.join(city_directory, file_name)
+    #g.save_to_file(file_path)
+    # visualize_graph.visualize_and_save_graph(loaded_graph, 'graph.png')
 
-    visualize_graph.visualize_and_save_graph(g, 'graph.png')
+    loaded_graph = Graph.load_from_file(file_path)
+
     return country
 
 @app.route('/')

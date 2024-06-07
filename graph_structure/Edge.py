@@ -13,3 +13,10 @@ class Edge:
     @property
     def weight(self):
         return hypot(self.node1.latitude - self.node2.latitude, self.node1.longitude - self.node2.longitude)
+
+    def to_dict(self):
+        return {
+            'node1_id': self.node1.id,
+            'node2_id': self.node2.id,
+            'visited': self.visited
+        }

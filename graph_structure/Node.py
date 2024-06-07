@@ -31,3 +31,16 @@ class Node:
 
         for neighbor in self.neighbors:
             neighbor['edge'].visited = False
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'latitude': self.latitude,
+            'longitude': self.longitude,
+            'edges': [edge.to_dict() for edge in self.edges]
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        node = cls(data['id'], data['latitude'], data['longitude'])
+        return node
