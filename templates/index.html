@@ -5,21 +5,265 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <title>PathFinder</title>
+    <style>
+        canvas {
+            display: block;
+            margin: 20px auto;
+        }
+    </style>
     <script>
-        function sendCity(city) {
-            fetch('/get_city', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({city: city})
-            }).then(response => {
-                // Handle response if needed
-            }).catch(error => {
-                console.error('Error:', error);
+    let graph = null;
+    let currentCity = null;
+    let originalGraph = null;
+    let selectedNodes = [];
+    let hoveredNode = null;
+    let canvas, ctx;
+    let bfsRunning = false;
+    const margin = 20;
+
+    function sendCity(city) {
+        currentCity = city;
+        fetch('/get_city', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({city: city})
+        })
+        .then(response => response.json())
+        .then(data => {
+            graph = JSON.parse(JSON.stringify(data));  // Deep copy the graph
+            originalGraph = JSON.parse(JSON.stringify(data));  // Store the original graph
+            calculateBounds();
+            drawGraph();
+        })
+        .catch(error => {
+            console.error('Error:', error);
+        });
+    }
+
+    function calculateBounds() {
+        minLat = Infinity;
+        maxLat = -Infinity;
+        minLon = Infinity;
+        maxLon = -Infinity;
+
+        for (let nodeId in graph.nodes) {
+            let node = graph.nodes[nodeId];
+            if (node.latitude < minLat) minLat = node.latitude;
+            if (node.latitude > maxLat) maxLat = node.latitude;
+            if (node.longitude < minLon) minLon = node.longitude;
+            if (node.longitude > maxLon) maxLon = node.longitude;
+        }
+    }
+
+    function mapToCanvas(lat, lon) {
+        let x = ((lon - minLon) / (maxLon - minLon)) * (canvas.width - 2 * margin) + margin;
+        let y = ((lat - minLat) / (maxLat - minLat)) * (canvas.height - 2 * margin) + margin;
+        return { x: x, y: canvas.height - y };
+    }
+
+    function drawGraph() {
+        if (!graph) return;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        ctx.lineWidth = 0.2;
+        for (let nodeId in graph.nodes) {
+            let node = graph.nodes[nodeId];
+            node.edges.forEach(edge => {
+                let node1 = graph.nodes[edge.node1_id];
+                let node2 = graph.nodes[edge.node2_id];
+                let p1 = mapToCanvas(node1.latitude, node1.longitude);
+                let p2 = mapToCanvas(node2.latitude, node2.longitude);
+
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.lineWidth = edge.visited ? 1 : 0.2;
+                ctx.strokeStyle = edge.visited ? 'orange' : 'grey';
+                ctx.stroke();
             });
         }
-    </script>
+
+        for (let nodeId in graph.nodes) {
+            let node = graph.nodes[nodeId];
+            let pos = mapToCanvas(node.latitude, node.longitude);
+            let radius = 0.1;
+
+            if (selectedNodes.includes(nodeId)) {
+                radius = 6;
+            } else if (hoveredNode === nodeId && selectedNodes.length < 2) {
+                radius = 5;
+            }
+
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI);
+
+            if (selectedNodes[0] === nodeId) {
+                ctx.fillStyle = 'green';
+            } else if (selectedNodes[1] === nodeId) {
+                ctx.fillStyle = 'red';
+            } else {
+                ctx.fillStyle = 'orange';
+            }
+
+            ctx.fill();
+            ctx.stroke();
+        }
+    }
+    function findClosestNode(x, y) {
+
+    let closestNode = null;
+    let minDist = Infinity;
+
+    for (let nodeId in graph.nodes) {
+        let node = graph.nodes[nodeId];
+        let pos = mapToCanvas(node.latitude, node.longitude);
+        let dist = Math.hypot(pos.x - x, pos.y - y);
+        if (dist < minDist) {
+            minDist = dist;
+            closestNode = nodeId;
+        }
+    }
+    return closestNode;
+}
+
+    function handleCanvasClick(event) {
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+
+        const closestNodeId = findClosestNode(x, y);
+        if (closestNodeId) {
+            if (selectedNodes.length < 2 && !selectedNodes.includes(closestNodeId)) {
+                selectedNodes.push(closestNodeId);
+            }
+            drawGraph();
+        }
+    }
+
+    function handleMouseMove(event) {
+        if (selectedNodes.length < 2) {
+            const rect = canvas.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+
+            const closestNodeId = findClosestNode(x, y);
+            if (closestNodeId !== hoveredNode) {
+                hoveredNode = closestNodeId;
+                drawGraph();
+            }
+        }
+    }
+
+    function resetSelection() {
+        sendCity(currentCity)
+        selectedNodes = [];
+        hoveredNode = null;
+        graph = JSON.parse(JSON.stringify(originalGraph));  // Revert to the original graph
+        bfsRunning = false;
+        drawGraph();
+    }
+
+    class Queue {
+        constructor() {
+            this.items = [];
+            this.front = 0;
+        }
+
+        enqueue(item) {
+            this.items.push(item);
+        }
+
+        dequeue() {
+            if (this.isEmpty()) return null;
+            const item = this.items[this.front];
+            this.front++;
+            if (this.front * 2 > this.items.length) {
+                this.items = this.items.slice(this.front);
+                this.front = 0;
+            }
+            return item;
+        }
+
+        isEmpty() {
+            return this.front >= this.items.length;
+        }
+    }
+
+ async function bfs(startNodeId) {
+    bfsRunning = true;
+    let queue = new Queue();
+    queue.enqueue(startNodeId);
+    let visited = new Set();
+    visited.add(startNodeId);
+    let drawCounter = 0;
+
+    while (!queue.isEmpty() && bfsRunning) {
+        let currentNodeId = queue.dequeue();
+
+        // Stop if we reach the second selected node
+        if (currentNodeId === selectedNodes[1]) {
+            console.log(`Reached the target node: ${currentNodeId}`);
+            drawGraph();  // Draw the final path
+            bfsRunning = false;  // Stop BFS
+            return;  // Exit the function
+        }
+
+        // Process edges
+        for (let edge of graph.nodes[currentNodeId].edges) {
+            let nextNodeId = edge.node1_id === currentNodeId ? edge.node2_id : edge.node1_id;
+            if (!visited.has(nextNodeId)) {
+                edge.visited = true;
+                visited.add(nextNodeId);
+                queue.enqueue(nextNodeId);
+
+                // Periodically redraw to visualize the process
+                if (drawCounter++ % 200 === 0) {
+                    drawGraph();
+                    await new Promise(r => setTimeout(r, 1));  // Pause for visualization
+                }
+            }
+        }
+    }
+
+    // Final draw in case we exit the loop normally
+    drawGraph();
+}
+
+    document.addEventListener('DOMContentLoaded', () => {
+        canvas = document.querySelector('canvas');
+        ctx = canvas.getContext('2d');
+        canvas.width = 1600;
+        canvas.height = 1200;
+        canvas.addEventListener('click', handleCanvasClick);
+        canvas.addEventListener('mousemove', handleMouseMove);
+
+        const startButton = document.createElement('button');
+        startButton.textContent = 'Start';
+        startButton.classList.add('CButton');
+        startButton.style.display = 'block';
+        startButton.style.margin = '20px auto';
+
+        startButton.onclick = async function() {
+            if (selectedNodes.length === 2 && !bfsRunning) {
+                await bfs(selectedNodes[0]);
+            }
+        };
+        document.body.appendChild(startButton);
+
+        const resetButton = document.createElement('button');
+        resetButton.textContent = 'Reset';
+        resetButton.classList.add('CButton');
+        resetButton.style.display = 'block';
+        resetButton.style.margin = '20px auto';
+        resetButton.onclick = resetSelection;
+        document.body.appendChild(resetButton);
+
+        document.body.insertBefore(startButton, resetButton);
+    });
+</script>
 </head>
 <body>
     <div class="titleWrap">
@@ -33,5 +277,6 @@
         <button class="CButton" onclick="sendCity('Paris')">Paris</button>
         <button class="CButton" onclick="sendCity('Dhaka Metropolitan')">Dhaka</button>
     </div>
+    <canvas></canvas>
 </body>
 </html>
