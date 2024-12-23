@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, json
 import os
 
 from graph_structure.Graph import Graph
@@ -8,7 +8,6 @@ app = Flask(__name__)
 @app.route('/get_city', methods=['POST'])
 def get_city():
     city = request.json['city']
-
 
     print(city)
 

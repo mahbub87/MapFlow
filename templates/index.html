@@ -18,7 +18,6 @@
     let selectedNodes = [];
     let hoveredNode = null;
     let canvas, ctx;
-    let bfsRunning = false;
     const margin = 20;
 
     function sendCity(city) {
@@ -64,54 +63,55 @@
     }
 
     function drawGraph() {
-        if (!graph) return;
+    if (!graph) return;
 
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        ctx.lineWidth = 0.2;
-        for (let nodeId in graph.nodes) {
-            let node = graph.nodes[nodeId];
-            node.edges.forEach(edge => {
-                let node1 = graph.nodes[edge.node1_id];
-                let node2 = graph.nodes[edge.node2_id];
-                let p1 = mapToCanvas(node1.latitude, node1.longitude);
-                let p2 = mapToCanvas(node2.latitude, node2.longitude);
-
-                ctx.beginPath();
-                ctx.moveTo(p1.x, p1.y);
-                ctx.lineTo(p2.x, p2.y);
-                ctx.lineWidth = edge.visited ? 1 : 0.2;
-                ctx.strokeStyle = edge.visited ? 'orange' : 'grey';
-                ctx.stroke();
-            });
-        }
-
-        for (let nodeId in graph.nodes) {
-            let node = graph.nodes[nodeId];
-            let pos = mapToCanvas(node.latitude, node.longitude);
-            let radius = 0.1;
-
-            if (selectedNodes.includes(nodeId)) {
-                radius = 6;
-            } else if (hoveredNode === nodeId && selectedNodes.length < 2) {
-                radius = 5;
-            }
+    // Draw edges
+    for (let nodeId in graph.nodes) {
+        let node = graph.nodes[nodeId];
+        node.edges.forEach(edge => {
+            let node1 = graph.nodes[edge.node1_id];
+            let node2 = graph.nodes[edge.node2_id];
+            let p1 = mapToCanvas(node1.latitude, node1.longitude);
+            let p2 = mapToCanvas(node2.latitude, node2.longitude);
 
             ctx.beginPath();
-            ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI);
-
-            if (selectedNodes[0] === nodeId) {
-                ctx.fillStyle = 'green';
-            } else if (selectedNodes[1] === nodeId) {
-                ctx.fillStyle = 'red';
-            } else {
-                ctx.fillStyle = 'orange';
-            }
-
-            ctx.fill();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.lineWidth = edge.visited ? 1 : (edge.shortestPath ? 3 : 0.2);
+            ctx.strokeStyle = edge.shortestPath ? 'blue' : (edge.visited ? 'orange' : 'grey');
             ctx.stroke();
-        }
+        });
     }
+
+    // Draw nodes
+    for (let nodeId in graph.nodes) {
+        let node = graph.nodes[nodeId];
+        let pos = mapToCanvas(node.latitude, node.longitude);
+        let radius = 0.1;
+
+        if (selectedNodes.includes(nodeId)) {
+            radius = 6;
+        } else if (hoveredNode === nodeId && selectedNodes.length < 2) {
+            radius = 5;
+        }
+
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI);
+
+        if (selectedNodes[0] === nodeId) {
+            ctx.fillStyle = 'green';
+        } else if (selectedNodes[1] === nodeId) {
+            ctx.fillStyle = 'red';
+        } else {
+            ctx.fillStyle = 'orange';
+        }
+
+        ctx.fill();
+        ctx.stroke();
+    }
+}
     function findClosestNode(x, y) {
 
     let closestNode = null;
@@ -166,72 +166,6 @@
         drawGraph();
     }
 
-    class Queue {
-        constructor() {
-            this.items = [];
-            this.front = 0;
-        }
-
-        enqueue(item) {
-            this.items.push(item);
-        }
-
-        dequeue() {
-            if (this.isEmpty()) return null;
-            const item = this.items[this.front];
-            this.front++;
-            if (this.front * 2 > this.items.length) {
-                this.items = this.items.slice(this.front);
-                this.front = 0;
-            }
-            return item;
-        }
-
-        isEmpty() {
-            return this.front >= this.items.length;
-        }
-    }
-
- async function bfs(startNodeId) {
-    bfsRunning = true;
-    let queue = new Queue();
-    queue.enqueue(startNodeId);
-    let visited = new Set();
-    visited.add(startNodeId);
-    let drawCounter = 0;
-
-    while (!queue.isEmpty() && bfsRunning) {
-        let currentNodeId = queue.dequeue();
-
-        // Stop if we reach the second selected node
-        if (currentNodeId === selectedNodes[1]) {
-            console.log(`Reached the target node: ${currentNodeId}`);
-            drawGraph();  // Draw the final path
-            bfsRunning = false;  // Stop BFS
-            return;  // Exit the function
-        }
-
-        // Process edges
-        for (let edge of graph.nodes[currentNodeId].edges) {
-            let nextNodeId = edge.node1_id === currentNodeId ? edge.node2_id : edge.node1_id;
-            if (!visited.has(nextNodeId)) {
-                edge.visited = true;
-                visited.add(nextNodeId);
-                queue.enqueue(nextNodeId);
-
-                // Periodically redraw to visualize the process
-                if (drawCounter++ % 200 === 0) {
-                    drawGraph();
-                    await new Promise(r => setTimeout(r, 1));  // Pause for visualization
-                }
-            }
-        }
-    }
-
-    // Final draw in case we exit the loop normally
-    drawGraph();
-}
-
     document.addEventListener('DOMContentLoaded', () => {
         canvas = document.querySelector('canvas');
         ctx = canvas.getContext('2d');
@@ -247,8 +181,8 @@
         startButton.style.margin = '20px auto';
 
         startButton.onclick = async function() {
-            if (selectedNodes.length === 2 && !bfsRunning) {
-                await bfs(selectedNodes[0]);
+            if (selectedNodes.length === 2 ) {
+                //start algorithm
             }
         };
         document.body.appendChild(startButton);
