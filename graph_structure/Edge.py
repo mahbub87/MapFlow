@@ -6,6 +6,7 @@ class Edge:
         self.node1 = node1
         self.node2 = node2
         self.visited = False
+        self.shortestPath = False
 
     def get_other_node(self, node):
         return self.node2 if node == self.node1 else self.node1
@@ -18,5 +19,6 @@ class Edge:
         return {
             'node1_id': self.node1.id,
             'node2_id': self.node2.id,
-            'visited': self.visited
+            'visited': self.visited,
+            'shortest_path': self.shortestPath
         }
