@@ -17,16 +17,20 @@ def get_city():
     global graph  # Reference the global graph variable
     city = request.json.get('city')  # Safely access the 'city' key
 
-    # Define the base directory
-    base_directory = r"C:\Users\shafi\PycharmProjects\PathFinder\data"
+    # Define the base directory relative to the application directory
+    base_directory = os.path.join(os.path.dirname(__file__), "data")
     city_directory = os.path.join(base_directory, city)
 
     # Construct the file path for the graph JSON
     file_path = os.path.join(city_directory, 'graph.json')
 
-    graph = Graph.load_from_file(file_path)  # Load graph
-    graph_data = graph.to_dict()  # Convert to dict for response
-    return jsonify(graph_data)
+    try:
+        graph = Graph.load_from_file(file_path)  # Load graph
+        graph_data = graph.to_dict()  # Convert to dict for response
+        return jsonify(graph_data)
+    except FileNotFoundError:
+        return jsonify({'error': f'City data for {city} not found.'}), 404
+
 
 
 @app.route('/pathfind', methods=['POST'])
