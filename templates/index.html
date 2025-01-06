@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-    <title>PathFinder</title>
+    <title>MapFlow</title>
     <style>
         canvas {
             display: block;
@@ -261,8 +261,18 @@ function findPath(algorithm) {
 </head>
 <body>
     <div class="titleWrap">
-        <h1><a href="{{ url_for('index') }}">PathFinder</a></h1>
+        <h1><a href="{{ url_for('index') }}">MapFlow</a></h1>
     </div>
+    <div class="instructions-box">
+        <h3>How to Use:</h3>
+        <ul>
+            <li>Click on a city to load its map.</li>
+            <li>Click on two points on the map to select start and end nodes.</li>
+            <li>Choose an algorithm to find the path.</li>
+            <li>Use the "Reset" button to clear the selection.</li>
+        </ul>
+    </div>
+
     <div class="cityButtons">
         <button class="CButton" onclick="sendCity('Paris')">Paris</button>
         <button class="CButton" onclick="sendCity('Rome')">Rome</button>
