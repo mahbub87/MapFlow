@@ -15,10 +15,13 @@ graph: Optional[Graph] = None
 @app.route('/get_city', methods=['POST'])
 def get_city():
     global graph  # Reference the global graph variable
-    city = request.json['city']
+    city = request.json.get('city')  # Safely access the 'city' key
 
-    directory = r"C:\Users\shafi\PycharmProjects\PathFinder\data" + "\\"
-    city_directory = os.path.join(directory, city)
+    # Define the base directory
+    base_directory = r"C:\Users\shafi\PycharmProjects\PathFinder\data"
+    city_directory = os.path.join(base_directory, city)
+
+    # Construct the file path for the graph JSON
     file_path = os.path.join(city_directory, 'graph.json')
 
     graph = Graph.load_from_file(file_path)  # Load graph
