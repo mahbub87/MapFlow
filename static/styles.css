@@ -84,3 +84,29 @@ h1 {
  #map {
             height: 600px;
         }
+
+ .instructions-box {
+     color: white;
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        padding: 10px;
+        border: 1px solid #ffffff;
+        border-radius: 5px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+         font-family: Courier New, serif;
+        font-size: 11px;
+        z-index: 1000;
+    }
+    .instructions-box h3 {
+        margin: 0 0 5px;
+        font-size: 16px;
+    }
+    .instructions-box ul {
+        padding: 0;
+        list-style-type: none;
+        margin: 0;
+    }
+    .instructions-box li {
+        margin: 5px 0;
+    }
