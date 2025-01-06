@@ -1,9 +1,9 @@
-MapFlow 🌍
+# MapFlow 🌍
 [Live Demo](https://mapflow.onrender.com)
 
 MapFlow is an interactive pathfinding and graph visualization tool that enables users to explore cities visualize popular pathfinding algorithms. 
 
-🛠️ Technologies Used
+### 🛠️ Technologies Used
 Frontend:
 HTML, CSS, JavaScript (Canvas API)
 Backend:
@@ -13,7 +13,7 @@ Dijkstra's, A*, BFS, DFS
 Deployment:
 Hosted on Render
 
-📖 How to Use
+### 📖 How to Use
 Visit the live demo: [MapFlow](https://mapflow.onrender.com)
 Select a city from the provided options (e.g., Paris, Rome, Chicago).
 Click on two nodes to set your start and end points.
@@ -22,7 +22,7 @@ End node: Highlighted in red.
 Choose an algorithm.
 Reset the graph or switch algorithms anytime.
 
-🔧 Local Setup
+### 🔧 Local Setup
 Clone the Repository:
 
 bash
