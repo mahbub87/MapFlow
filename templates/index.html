@@ -281,12 +281,16 @@ function findPath(algorithm) {
         <button class="CButton" onclick="sendCity('Berlin')">Berlin</button>
         <button class="CButton" onclick="sendCity('Dhaka Metropolitan')">Dhaka</button>
     </div>
-    <div class="algoButt">
-        <button class="CButton" onclick="findPath('dijkstra')">(Dijkstra)</button>
-        <button class="CButton" onclick="findPath('a_star')">(A*)</button>
-        <button class="CButton" onclick="findPath('bfs')">(BFS)</button>
-        <button class="CButton" onclick="findPath('dfs')">(DFS)</button>
-        <button class="CButton" onclick="findPath('bi')">(Bidirect)</button>
+
+    <div class="algoWrap">
+        <h2 class="algoHeader">Algorithms</h2>
+        <div class="algoButt">
+            <button class="CButton" onclick="findPath('dijkstra')">Dijkstra</button>
+            <button class="CButton" onclick="findPath('a_star')">A*</button>
+            <button class="CButton" onclick="findPath('bfs')">BFS</button>
+            <button class="CButton" onclick="findPath('dfs')">DFS</button>
+            <button class="CButton" onclick="findPath('bi')">Bidirectional</button>
+        </div>
     </div>
     <canvas></canvas>
 </body>
