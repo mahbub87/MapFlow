@@ -2,6 +2,8 @@ import json
 
 from graph_structure.Edge import Edge
 from graph_structure.Node import Node
+
+
 class Graph:
 
     def __init__(self):
@@ -60,3 +62,8 @@ class Graph:
             graph = cls()
             graph.from_dict(data)
             return graph
+
+    def reset_shortest_path(self):
+        for node in self.nodes.values():
+            for edge in node.edges:
+                edge.shortestPath = False

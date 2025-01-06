@@ -21,25 +21,28 @@
     const margin = 20;
 
     function sendCity(city) {
-        currentCity = city;
-        fetch('/get_city', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({city: city})
-        })
-        .then(response => response.json())
-        .then(data => {
-            graph = JSON.parse(JSON.stringify(data));  // Deep copy the graph
-            originalGraph = JSON.parse(JSON.stringify(data));  // Store the original graph
-            calculateBounds();
-            drawGraph();
-        })
-        .catch(error => {
-            console.error('Error:', error);
-        });
-    }
+    currentCity = city;
+    selectedNodes = []; // Reset selected nodes
+    hoveredNode = null; // Reset hovered node
+    fetch('/get_city', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ city: city })
+    })
+    .then(response => response.json())
+    .then(data => {
+        graph = JSON.parse(JSON.stringify(data));  // Deep copy the graph
+        originalGraph = JSON.parse(JSON.stringify(data));  // Store the original graph
+        calculateBounds();
+        drawGraph();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+    });
+}
+
 
     function calculateBounds() {
         minLat = Infinity;
@@ -79,8 +82,21 @@
             ctx.beginPath();
             ctx.moveTo(p1.x, p1.y);
             ctx.lineTo(p2.x, p2.y);
-            ctx.lineWidth = edge.visited ? 1 : (edge.shortestPath ? 3 : 0.2);
-            ctx.strokeStyle = edge.shortestPath ? 'blue' : (edge.visited ? 'orange' : 'grey');
+
+            if (edge.shortest_path) {
+                // Highlight shortest path edges
+                ctx.lineWidth = 0.5;
+                ctx.strokeStyle = 'Gold';
+            } else if (edge.visited) {
+                // Highlight visited edges
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = 'orange';
+            } else {
+                // Default edges
+                ctx.lineWidth = 0.1;
+                ctx.strokeStyle = 'dimgray';
+            }
+
             ctx.stroke();
         });
     }
@@ -89,30 +105,35 @@
     for (let nodeId in graph.nodes) {
         let node = graph.nodes[nodeId];
         let pos = mapToCanvas(node.latitude, node.longitude);
-        let radius = 0.1;
+        let radius = 0.05; // Default radius
 
         if (selectedNodes.includes(nodeId)) {
-            radius = 6;
+            radius = 3; // Highlight selected nodes
         } else if (hoveredNode === nodeId && selectedNodes.length < 2) {
-            radius = 5;
+            radius = 3; // Highlight hovered nodes
         }
 
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI);
 
         if (selectedNodes[0] === nodeId) {
-            ctx.fillStyle = 'green';
+            ctx.fillStyle = 'green'; // Start node
         } else if (selectedNodes[1] === nodeId) {
-            ctx.fillStyle = 'red';
+            ctx.fillStyle = 'red'; // End node
         } else {
-            ctx.fillStyle = 'orange';
+            ctx.fillStyle = 'darkorange'; // Regular node
         }
 
         ctx.fill();
         ctx.stroke();
     }
 }
-    function findClosestNode(x, y) {
+
+function findClosestNode(x, y) {
+    if (!graph || !graph.nodes) {
+        console.error('Graph is not loaded or is null');
+        return null;
+    }
 
     let closestNode = null;
     let minDist = Infinity;
@@ -143,19 +164,24 @@
         }
     }
 
-    function handleMouseMove(event) {
-        if (selectedNodes.length < 2) {
-            const rect = canvas.getBoundingClientRect();
-            const x = event.clientX - rect.left;
-            const y = event.clientY - rect.top;
+  function handleMouseMove(event) {
+    if (!graph || !graph.nodes) {
+        console.error('Graph is not loaded or is null');
+        return; // Exit the function
+    }
 
-            const closestNodeId = findClosestNode(x, y);
-            if (closestNodeId !== hoveredNode) {
-                hoveredNode = closestNodeId;
-                drawGraph();
-            }
+    if (selectedNodes.length < 2) {
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+
+        const closestNodeId = findClosestNode(x, y);
+        if (closestNodeId !== hoveredNode) {
+            hoveredNode = closestNodeId;
+            drawGraph();
         }
     }
+}
 
     function resetSelection() {
         sendCity(currentCity)
@@ -166,6 +192,52 @@
         drawGraph();
     }
 
+function findPath(algorithm) {
+    if (!graph || selectedNodes.length < 2) {
+        alert('Please select two nodes first!');
+        return;
+    }
+
+    const payload = {
+        start_id: selectedNodes[0],
+        end_id: selectedNodes[1],
+        algorithm: algorithm
+    };
+
+    console.log('Sending payload:', payload); // Debugging
+
+    fetch('/pathfind', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Failed to find path: ' + response.statusText);
+        }
+        return response.json();
+    })
+    .then(data => {
+
+        if (data.updatedGraph) {
+
+            graph = data.updatedGraph; // Update graph with the new data
+            console.log('Response from /pathfind:', data);
+
+            drawGraph();
+        } else {
+            console.error('Invalid response from server:', data);
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+    });
+}
+
+
+
     document.addEventListener('DOMContentLoaded', () => {
         canvas = document.querySelector('canvas');
         ctx = canvas.getContext('2d');
@@ -174,18 +246,6 @@
         canvas.addEventListener('click', handleCanvasClick);
         canvas.addEventListener('mousemove', handleMouseMove);
 
-        const startButton = document.createElement('button');
-        startButton.textContent = 'Start';
-        startButton.classList.add('CButton');
-        startButton.style.display = 'block';
-        startButton.style.margin = '20px auto';
-
-        startButton.onclick = async function() {
-            if (selectedNodes.length === 2 ) {
-                //start algorithm
-            }
-        };
-        document.body.appendChild(startButton);
 
         const resetButton = document.createElement('button');
         resetButton.textContent = 'Reset';
@@ -195,7 +255,7 @@
         resetButton.onclick = resetSelection;
         document.body.appendChild(resetButton);
 
-        document.body.insertBefore(startButton, resetButton);
+        document.body.insertBefore(canvas, resetButton);
     });
 </script>
 </head>
@@ -204,12 +264,19 @@
         <h1><a href="{{ url_for('index') }}">PathFinder</a></h1>
     </div>
     <div class="cityButtons">
+        <button class="CButton" onclick="sendCity('Paris')">Paris</button>
         <button class="CButton" onclick="sendCity('Rome')">Rome</button>
         <button class="CButton" onclick="sendCity('Chicago')">Chicago</button>
         <button class="CButton" onclick="sendCity('Cairo')">Cairo</button>
         <button class="CButton" onclick="sendCity('Berlin')">Berlin</button>
-        <button class="CButton" onclick="sendCity('Paris')">Paris</button>
         <button class="CButton" onclick="sendCity('Dhaka Metropolitan')">Dhaka</button>
+    </div>
+    <div class="algoButt">
+        <button class="CButton" onclick="findPath('dijkstra')">(Dijkstra)</button>
+        <button class="CButton" onclick="findPath('a_star')">(A*)</button>
+        <button class="CButton" onclick="findPath('bfs')">(BFS)</button>
+        <button class="CButton" onclick="findPath('dfs')">(DFS)</button>
+        <button class="CButton" onclick="findPath('bi')">(Bidirect)</button>
     </div>
     <canvas></canvas>
 </body>
