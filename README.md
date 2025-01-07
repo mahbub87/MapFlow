@@ -1,6 +1,6 @@
 # MapFlow 🌍
 [Live Demo](https://mapflow.onrender.com)
-
+### please allow 50 seconds to start the webapp
 MapFlow is an interactive pathfinding and graph visualization tool that enables users to explore cities visualize popular pathfinding algorithms. 
 
 ### 🛠️ Technologies Used
