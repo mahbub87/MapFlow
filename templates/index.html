@@ -6,42 +6,67 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <title>MapFlow</title>
     <style>
-        canvas {
-            display: block;
-            margin: 20px auto;
-        }
+        /* Inline style trimmed; see static/styles.css for layout */
     </style>
     <script>
     let graph = null;
     let currentCity = null;
-    let originalGraph = null;
     let selectedNodes = [];
     let hoveredNode = null;
     let canvas, ctx;
     const margin = 20;
 
+    // Performance caches
+    let nodePos = {};     // nodeId -> {x, y}
+    let uniqueEdges = []; // [{n1, n2}]
+    let pathNodes = [];   // current path returned by server
+    let hoverRAF = null;  // throttle mousemove
+    let anim = {
+        playing: false,
+        queue: [],
+        index: 0,
+        timer: null,
+        raf: null,
+        _visitedSet: new Set(),
+        nodesPerFrame: 0,
+        glow: new Map(),        // nodeId -> intensity [0..1]
+        lastTs: 0,
+        glowDecayPerSec: 3.0,   // higher = faster fade
+        // final path glow state
+        pathActive: false,
+        pathRaf: null,
+        pathLastTs: 0,
+        pathGlowIntensity: 0,
+        pathDecayPerSec: 0.5    // slow fade for final path
+    };
+    // Spatial index for fast hover
+    let grid = null; let cellSize = 24; let gridCols = 0, gridRows = 0, gridMinX = 0, gridMinY = 0;
+
     function sendCity(city) {
-    currentCity = city;
-    selectedNodes = []; // Reset selected nodes
-    hoveredNode = null; // Reset hovered node
-    fetch('/get_city', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ city: city })
-    })
-    .then(response => response.json())
-    .then(data => {
-        graph = JSON.parse(JSON.stringify(data));  // Deep copy the graph
-        originalGraph = JSON.parse(JSON.stringify(data));  // Store the original graph
-        calculateBounds();
-        drawGraph();
-    })
-    .catch(error => {
-        console.error('Error:', error);
-    });
-}
+        currentCity = city;
+        selectedNodes = [];
+        hoveredNode = null;
+        pathNodes = [];
+
+        fetch('/get_city', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ city: city })
+        })
+        .then(response => response.json())
+        .then(data => {
+            graph = data; // keep as-is; no deep copy
+            calculateBounds();
+            precomputePositions();
+            buildUniqueEdges();
+            buildSpatialIndex();
+            drawGraph();
+            updateHUD();
+        })
+        .catch(error => {
+            console.error('Error:', error);
+        });
+    }
 
 
     function calculateBounds() {
@@ -51,7 +76,7 @@
         maxLon = -Infinity;
 
         for (let nodeId in graph.nodes) {
-            let node = graph.nodes[nodeId];
+            const node = graph.nodes[nodeId];
             if (node.latitude < minLat) minLat = node.latitude;
             if (node.latitude > maxLat) maxLat = node.latitude;
             if (node.longitude < minLon) minLon = node.longitude;
@@ -60,95 +85,196 @@
     }
 
     function mapToCanvas(lat, lon) {
-        let x = ((lon - minLon) / (maxLon - minLon)) * (canvas.width - 2 * margin) + margin;
-        let y = ((lat - minLat) / (maxLat - minLat)) * (canvas.height - 2 * margin) + margin;
+        const x = ((lon - minLon) / (maxLon - minLon)) * (canvas.width - 2 * margin) + margin;
+        const y = ((lat - minLat) / (maxLat - minLat)) * (canvas.height - 2 * margin) + margin;
         return { x: x, y: canvas.height - y };
     }
 
+    // Precompute node screen positions once
+    function precomputePositions() {
+        nodePos = {};
+        for (let nodeId in graph.nodes) {
+            const n = graph.nodes[nodeId];
+            nodePos[nodeId] = mapToCanvas(n.latitude, n.longitude);
+        }
+    }
+
+    // Build a unique edge list so we draw each edge once
+    function buildUniqueEdges() {
+        uniqueEdges = [];
+        const seen = new Set();
+        for (let nodeId in graph.nodes) {
+            const node = graph.nodes[nodeId];
+            node.edges.forEach(e => {
+                const a = String(e.node1_id);
+                const b = String(e.node2_id);
+                const key = a < b ? a + '-' + b : b + '-' + a;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    uniqueEdges.push({ n1: a, n2: b });
+                }
+            });
+        }
+    }
+
+    // Build grid index over node positions for fast nearest lookup
+    function buildSpatialIndex() {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (let id in nodePos) {
+            const p = nodePos[id];
+            if (p.x < minX) minX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y > maxY) maxY = p.y;
+        }
+        gridMinX = Math.floor(minX);
+        gridMinY = Math.floor(minY);
+        gridCols = Math.max(1, Math.ceil((maxX - gridMinX) / cellSize));
+        gridRows = Math.max(1, Math.ceil((maxY - gridMinY) / cellSize));
+        grid = new Map();
+        const key = (cx, cy) => `${cx},${cy}`;
+        for (let id in nodePos) {
+            const p = nodePos[id];
+            const cx = Math.min(gridCols - 1, Math.max(0, Math.floor((p.x - gridMinX) / cellSize)));
+            const cy = Math.min(gridRows - 1, Math.max(0, Math.floor((p.y - gridMinY) / cellSize)));
+            const k = key(cx, cy);
+            if (!grid.has(k)) grid.set(k, []);
+            grid.get(k).push(id);
+        }
+    }
+
     function drawGraph() {
-    if (!graph) return;
+        if (!graph) return;
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw edges
-    for (let nodeId in graph.nodes) {
-        let node = graph.nodes[nodeId];
-        node.edges.forEach(edge => {
-            let node1 = graph.nodes[edge.node1_id];
-            let node2 = graph.nodes[edge.node2_id];
-            let p1 = mapToCanvas(node1.latitude, node1.longitude);
-            let p2 = mapToCanvas(node2.latitude, node2.longitude);
-
-            ctx.beginPath();
+        // Draw base edges once (thin)
+        ctx.save();
+        ctx.lineWidth = 0.1;
+        ctx.strokeStyle = 'dimgray';
+        ctx.beginPath();
+        for (let i = 0; i < uniqueEdges.length; i++) {
+            const { n1, n2 } = uniqueEdges[i];
+            const p1 = nodePos[n1];
+            const p2 = nodePos[n2];
             ctx.moveTo(p1.x, p1.y);
             ctx.lineTo(p2.x, p2.y);
+        }
+        ctx.stroke();
+        ctx.restore();
 
-            if (edge.shortest_path) {
-                // Highlight shortest path edges
-                ctx.lineWidth = 0.5;
-                ctx.strokeStyle = 'Gold';
-            } else if (edge.visited) {
-                // Highlight visited edges
-                ctx.lineWidth = 1;
-                ctx.strokeStyle = 'orange';
-            } else {
-                // Default edges
-                ctx.lineWidth = 0.1;
-                ctx.strokeStyle = 'dimgray';
+    // Draw returned path as a single polyline (not during animation)
+    if (!anim.playing && pathNodes && pathNodes.length > 1) {
+            ctx.save();
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = 'gold';
+            ctx.beginPath();
+            const first = nodePos[pathNodes[0]];
+            ctx.moveTo(first.x, first.y);
+            for (let i = 1; i < pathNodes.length; i++) {
+                const p = nodePos[pathNodes[i]];
+                ctx.lineTo(p.x, p.y);
+            }
+            ctx.stroke();
+            ctx.restore();
+
+            // Bright glow overlay for final path (slowly dims)
+            if (anim.pathActive && anim.pathGlowIntensity > 0) {
+                ctx.save();
+                ctx.globalCompositeOperation = 'lighter';
+                ctx.lineWidth = 2 + 6 * anim.pathGlowIntensity;
+                ctx.strokeStyle = `rgba(255, 215, 0, ${Math.min(0.9, 0.35 + 0.55 * anim.pathGlowIntensity)})`;
+                ctx.shadowColor = 'rgba(255, 215, 0, 1)';
+                ctx.shadowBlur = 12 + 28 * anim.pathGlowIntensity;
+                ctx.beginPath();
+                const f2 = nodePos[pathNodes[0]];
+                ctx.moveTo(f2.x, f2.y);
+                for (let i = 1; i < pathNodes.length; i++) {
+                    const p = nodePos[pathNodes[i]];
+                    ctx.lineTo(p.x, p.y);
+                }
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+
+        // Subtle glow overlay for recently visited nodes (during animation)
+        if (anim.playing && anim.glow && anim.glow.size > 0) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            for (const [nid, intensity] of anim.glow.entries()) {
+                const pos = nodePos[nid];
+                if (!pos) continue;
+                const r = 2 + 5 * intensity;
+                ctx.beginPath();
+                // Orange glow to match node color (darkorange)
+                ctx.fillStyle = `rgba(255, 140, 0, ${Math.min(0.55, 0.18 + 0.32 * intensity)})`;
+                ctx.arc(pos.x, pos.y, r, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+
+        // Draw nodes
+    ctx.save();
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 0.5;
+    for (let nodeId in graph.nodes) {
+            const pos = nodePos[nodeId];
+            let radius = 0.05; // default small dot
+
+            // During animation, slightly enlarge visited nodes
+            if (anim.playing && anim.index > 0) {
+                if (anim._visitedSet.has(String(nodeId))) {
+                    radius = 1.5;
+                }
             }
 
+            if (selectedNodes.includes(nodeId)) {
+                radius = 3;
+            } else if (hoveredNode === nodeId && selectedNodes.length < 2) {
+                radius = 3;
+            }
+
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI);
+
+            if (selectedNodes[0] === nodeId) {
+                ctx.fillStyle = 'green';
+            } else if (selectedNodes[1] === nodeId) {
+                ctx.fillStyle = 'red';
+            } else {
+                ctx.fillStyle = 'darkorange';
+            }
+
+            ctx.fill();
             ctx.stroke();
-        });
-    }
-
-    // Draw nodes
-    for (let nodeId in graph.nodes) {
-        let node = graph.nodes[nodeId];
-        let pos = mapToCanvas(node.latitude, node.longitude);
-        let radius = 0.05; // Default radius
-
-        if (selectedNodes.includes(nodeId)) {
-            radius = 3; // Highlight selected nodes
-        } else if (hoveredNode === nodeId && selectedNodes.length < 2) {
-            radius = 3; // Highlight hovered nodes
         }
+    ctx.restore();
+    }
 
-        ctx.beginPath();
-        ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI);
-
-        if (selectedNodes[0] === nodeId) {
-            ctx.fillStyle = 'green'; // Start node
-        } else if (selectedNodes[1] === nodeId) {
-            ctx.fillStyle = 'red'; // End node
-        } else {
-            ctx.fillStyle = 'darkorange'; // Regular node
+    function findClosestNode(x, y) {
+        if (!graph || !graph.nodes || !grid) return null;
+        const cx = Math.min(gridCols - 1, Math.max(0, Math.floor((x - gridMinX) / cellSize)));
+        const cy = Math.min(gridRows - 1, Math.max(0, Math.floor((y - gridMinY) / cellSize)));
+        const key = (ix, iy) => `${ix},${iy}`;
+        let closestNode = null; let minDist = Infinity;
+        for (let iy = cy - 1; iy <= cy + 1; iy++) {
+            if (iy < 0 || iy >= gridRows) continue;
+            for (let ix = cx - 1; ix <= cx + 1; ix++) {
+                if (ix < 0 || ix >= gridCols) continue;
+                const arr = grid.get(key(ix, iy));
+                if (!arr) continue;
+                for (let i = 0; i < arr.length; i++) {
+                    const id = arr[i];
+                    const p = nodePos[id];
+                    const dx = p.x - x, dy = p.y - y; const d2 = dx*dx + dy*dy;
+                    if (d2 < minDist) { minDist = d2; closestNode = id; }
+                }
+            }
         }
-
-        ctx.fill();
-        ctx.stroke();
+        return closestNode;
     }
-}
-
-function findClosestNode(x, y) {
-    if (!graph || !graph.nodes) {
-        console.error('Graph is not loaded or is null');
-        return null;
-    }
-
-    let closestNode = null;
-    let minDist = Infinity;
-
-    for (let nodeId in graph.nodes) {
-        let node = graph.nodes[nodeId];
-        let pos = mapToCanvas(node.latitude, node.longitude);
-        let dist = Math.hypot(pos.x - x, pos.y - y);
-        if (dist < minDist) {
-            minDist = dist;
-            closestNode = nodeId;
-        }
-    }
-    return closestNode;
-}
 
     function handleCanvasClick(event) {
         const rect = canvas.getBoundingClientRect();
@@ -160,135 +286,235 @@ function findClosestNode(x, y) {
             if (selectedNodes.length < 2 && !selectedNodes.includes(closestNodeId)) {
                 selectedNodes.push(closestNodeId);
             }
+            updateHUD();
             drawGraph();
         }
     }
 
-  function handleMouseMove(event) {
-    if (!graph || !graph.nodes) {
-        console.error('Graph is not loaded or is null');
-        return; // Exit the function
-    }
-
-    if (selectedNodes.length < 2) {
+    // Smooth hover with RAF using the latest mouse position
+    let lastMouse = null;
+    function handleMouseMove(event) {
+        if (!graph || !graph.nodes || selectedNodes.length >= 2) return;
         const rect = canvas.getBoundingClientRect();
-        const x = event.clientX - rect.left;
-        const y = event.clientY - rect.top;
-
-        const closestNodeId = findClosestNode(x, y);
-        if (closestNodeId !== hoveredNode) {
-            hoveredNode = closestNodeId;
-            drawGraph();
-        }
+        lastMouse = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+        if (hoverRAF) return;
+        hoverRAF = requestAnimationFrame(() => {
+            hoverRAF = null;
+            if (!lastMouse) return;
+            const closestNodeId = findClosestNode(lastMouse.x, lastMouse.y);
+            if (closestNodeId !== hoveredNode) {
+                hoveredNode = closestNodeId;
+                updateHUD();
+                drawGraph();
+            }
+        });
     }
-}
 
     function resetSelection() {
-        sendCity(currentCity)
+        stopAnimation();
         selectedNodes = [];
         hoveredNode = null;
-        graph = JSON.parse(JSON.stringify(originalGraph));  // Revert to the original graph
-        bfsRunning = false;
-        drawGraph();
+        pathNodes = [];
+    drawGraph();
+    updateHUD();
     }
 
-function findPath(algorithm) {
-    if (!graph || selectedNodes.length < 2) {
-        alert('Please select two nodes first!');
-        return;
-    }
-
-    const payload = {
-        start_id: selectedNodes[0],
-        end_id: selectedNodes[1],
-        algorithm: algorithm
-    };
-
-    console.log('Sending payload:', payload); // Debugging
-
-    fetch('/pathfind', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Failed to find path: ' + response.statusText);
+    function stopAnimation() {
+        anim.playing = false;
+        anim.queue = [];
+        anim.index = 0;
+        anim._visitedSet = new Set();
+        anim.glow = new Map();
+        if (anim.timer) {
+            clearInterval(anim.timer);
+            anim.timer = null;
         }
-        return response.json();
-    })
-    .then(data => {
+        if (anim.raf) {
+            cancelAnimationFrame(anim.raf);
+            anim.raf = null;
+        }
+        if (anim.pathRaf) {
+            cancelAnimationFrame(anim.pathRaf);
+            anim.pathRaf = null;
+        }
+        anim.pathActive = false;
+        anim.pathGlowIntensity = 0;
+        anim.pathLastTs = 0;
+    }
 
-        if (data.updatedGraph) {
+    function startAnimation(visited, finalPath) {
+        stopAnimation();
+        anim.playing = true;
+        anim.queue = (visited || []).map(String);
+        anim.index = 0;
+        anim._visitedSet = new Set();
+        anim.glow = new Map();
+        anim.lastTs = 0;
 
-            graph = data.updatedGraph; // Update graph with the new data
-            console.log('Response from /pathfind:', data);
+        // Compute how many nodes to consume per frame to finish quickly (~0.5s)
+        const total = anim.queue.length || 1;
+        anim.nodesPerFrame = Math.max(50, Math.ceil(total / 30)); // ~30 frames
+
+        const step = (ts) => {
+            if (!anim.playing) return;
+            if (!anim.lastTs) anim.lastTs = ts;
+            const dt = Math.max(0, (ts - anim.lastTs) / 1000);
+            anim.lastTs = ts;
+
+            // Consume a batch this frame
+            const end = Math.min(anim.index + anim.nodesPerFrame, anim.queue.length);
+            for (let i = anim.index; i < end; i++) {
+                const id = anim.queue[i];
+                anim._visitedSet.add(id);
+                anim.glow.set(id, 1.0); // new discovery glows bright
+            }
+            anim.index = end;
+
+            // Decay existing glow intensities
+            if (anim.glow.size > 0 && dt > 0) {
+                const factor = Math.exp(-anim.glowDecayPerSec * dt);
+                for (const [nid, val] of Array.from(anim.glow.entries())) {
+                    const nv = val * factor;
+                    if (nv < 0.03) anim.glow.delete(nid);
+                    else anim.glow.set(nid, nv);
+                }
+            }
 
             drawGraph();
-        } else {
-            console.error('Invalid response from server:', data);
-        }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-    });
-}
 
+            if (anim.index >= anim.queue.length) {
+                // Done: stop animation and show only final path
+                stopAnimation();
+                pathNodes = (finalPath || []).map(String);
+                startPathGlow();
+                drawGraph();
+                return;
+            }
+
+            anim.raf = requestAnimationFrame(step);
+        };
+
+        anim.raf = requestAnimationFrame(step);
+    }
+
+    function startPathGlow() {
+        anim.pathActive = true;
+        anim.pathGlowIntensity = 1.0; // bright at start
+        anim.pathLastTs = 0;
+
+        const stepPath = (ts) => {
+            if (!anim.pathActive) return;
+            if (!anim.pathLastTs) anim.pathLastTs = ts;
+            const dt = Math.max(0, (ts - anim.pathLastTs) / 1000);
+            anim.pathLastTs = ts;
+
+            // slow exponential decay
+            const factor = Math.exp(-anim.pathDecayPerSec * dt);
+            anim.pathGlowIntensity *= factor;
+            if (anim.pathGlowIntensity < 0.03) {
+                anim.pathActive = false;
+                anim.pathGlowIntensity = 0;
+                drawGraph();
+                return;
+            }
+
+            drawGraph();
+            anim.pathRaf = requestAnimationFrame(stepPath);
+        };
+
+        anim.pathRaf = requestAnimationFrame(stepPath);
+    }
+
+    function findPath(algorithm) {
+        if (!graph || selectedNodes.length < 2) {
+            alert('Please select two nodes first!');
+            return;
+        }
+
+        const payload = {
+            start_id: selectedNodes[0],
+            end_id: selectedNodes[1],
+            algorithm: algorithm
+        };
+
+        fetch('/pathfind', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(response => {
+            if (!response.ok) throw new Error('Failed to find path: ' + response.statusText);
+            return response.json();
+        })
+        .then(data => {
+            const path = Array.isArray(data.path) ? data.path : [];
+            const visited = Array.isArray(data.visited) ? data.visited : [];
+            startAnimation(visited, path);
+        })
+        .catch(error => console.error('Error:', error));
+    }
+
+    function updateHUD() {
+        const hudCity = document.getElementById('hudCity');
+        const hudSel = document.getElementById('hudSel');
+        const hudHover = document.getElementById('hudHover');
+        if (hudCity) hudCity.textContent = `City: ${currentCity || '-'}`;
+        if (hudSel) hudSel.textContent = `Start: ${selectedNodes[0] || '-'}, End: ${selectedNodes[1] || '-'}`;
+        if (hudHover) hudHover.textContent = `Hover: ${hoveredNode || '-'}`;
+    }
 
 
     document.addEventListener('DOMContentLoaded', () => {
         canvas = document.querySelector('canvas');
         ctx = canvas.getContext('2d');
-        canvas.width = 1600;
-        canvas.height = 1200;
+        function resizeCanvas() {
+            const topbar = document.querySelector('.topbar');
+            const topbarHeight = topbar ? topbar.offsetHeight : 0;
+            canvas.width = window.innerWidth;
+            canvas.height = Math.max(300, window.innerHeight - topbarHeight - 56);
+            if (graph) {
+                precomputePositions();
+                buildUniqueEdges();
+                buildSpatialIndex();
+                drawGraph();
+            }
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
         canvas.addEventListener('click', handleCanvasClick);
         canvas.addEventListener('mousemove', handleMouseMove);
-
-
-        const resetButton = document.createElement('button');
-        resetButton.textContent = 'Reset';
-        resetButton.classList.add('CButton');
-        resetButton.style.display = 'block';
-        resetButton.style.margin = '20px auto';
-        resetButton.onclick = resetSelection;
-        document.body.appendChild(resetButton);
-
-        document.body.insertBefore(canvas, resetButton);
+        updateHUD();
     });
-</script>
+    </script>
 </head>
 <body>
-    <div class="titleWrap">
-        <h1><a href="{{ url_for('index') }}">MapFlow</a></h1>
-    </div>
-    <div class="instructions-box">
-        <h3>How to Use:</h3>
-        <ul>
-            <li>Click on a city to load its map.</li>
-            <li>Click on two points on the map to select start and end nodes.</li>
-            <li>Choose an algorithm to find the path.</li>
-            <li>Use the "Reset" button to clear the selection.</li>
-        </ul>
-    </div>
-
-    <div class="cityButtons">
-        <button class="CButton" onclick="sendCity('Paris')">Paris</button>
-        <button class="CButton" onclick="sendCity('Rome')">Rome</button>
-        <button class="CButton" onclick="sendCity('Chicago')">Chicago</button>
-        <button class="CButton" onclick="sendCity('Berlin')">Berlin</button>
-    </div>
-
-    <div class="algoWrap">
-        <h2 class="algoHeader">Algorithms</h2>
-        <div class="algoButt">
-            <button class="CButton" onclick="findPath('dijkstra')">Dijkstra</button>
-            <button class="CButton" onclick="findPath('a_star')">A*</button>
-            <button class="CButton" onclick="findPath('bfs')">BFS</button>
-            <button class="CButton" onclick="findPath('dfs')">DFS</button>
-            <button class="CButton" onclick="findPath('bi')">Bidirectional</button>
+    <div class="topbar">
+        <div class="brand"><a href="{{ url_for('index') }}">MapFlow</a></div>
+        <div class="controls">
+            <div class="group">
+                <span class="label">City:</span>
+                <button class="CButton small" onclick="sendCity('Paris')">Paris</button>
+                <button class="CButton small" onclick="sendCity('Rome')">Rome</button>
+                <button class="CButton small" onclick="sendCity('Chicago')">Chicago</button>
+                <button class="CButton small" onclick="sendCity('Berlin')">Berlin</button>
+            </div>
+            <div class="group">
+                <span class="label">Algorithm:</span>
+                <button class="CButton small" onclick="findPath('dijkstra')">Dijkstra</button>
+                <button class="CButton small" onclick="findPath('a_star')">A*</button>
+                <button class="CButton small" onclick="findPath('bfs')">BFS</button>
+                <button class="CButton small" onclick="findPath('dfs')">DFS</button>
+                <button class="CButton small" onclick="findPath('bi')">Bidirectional</button>
+            </div>
+            <div class="group">
+                <button class="CButton small accent" onclick="resetSelection()">Reset</button>
+            </div>
         </div>
+    </div>
+    <div class="hud">
+        <span id="hudCity">City: -</span>
+        <span id="hudSel">Start: -, End: -</span>
+        <span id="hudHover">Hover: -</span>
     </div>
     <canvas></canvas>
 </body>

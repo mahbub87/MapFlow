@@ -8,9 +8,11 @@ from graph_structure.Graph import Graph
 from algorithms.dijkstra import dijkstra
 from algorithms.a_star import a_star
 from typing import Optional
+from flask_compress import Compress  # Enable gzip compression for large JSON responses
 
 
 app = Flask(__name__)
+Compress(app)
 graph: Optional[Graph] = None
 @app.route('/get_city', methods=['POST'])
 def get_city():
@@ -61,31 +63,22 @@ def pathfind():
         node.reset()
     graph.reset_shortest_path()
 
-    # Perform pathfinding based on the algorithm
+    # Perform pathfinding based on the algorithm (get path and visit order)
     if algorithm == 'dijkstra':
-        path = dijkstra(graph, start_id, end_id)
+        path, visited = dijkstra(graph, start_id, end_id)
     elif algorithm == 'a_star':
-        path = a_star(graph, start_id, end_id)
+        path, visited = a_star(graph, start_id, end_id)
     elif algorithm == 'bfs':
-        path = bfs(graph, start_id, end_id)
+        path, visited = bfs(graph, start_id, end_id)
     elif algorithm == 'dfs':
-        path = dfs(graph, start_id, end_id)
+        path, visited = dfs(graph, start_id, end_id)
     elif algorithm == 'bi':
-        path = bidirectional_search(graph, start_id, end_id)
+        path, visited = bidirectional_search(graph, start_id, end_id)
     else:
         return jsonify({'error': 'Invalid algorithm'}), 400
 
-    # Mark edges in the path
-    for i in range(len(path) - 1):
-        node1_id = path[i]
-        node2_id = path[i + 1]
-        for edge in graph.nodes[node1_id].edges:
-            if (edge.node1.id == node1_id and edge.node2.id == node2_id) or \
-                    (edge.node1.id == node2_id and edge.node2.id == node1_id):
-                edge.shortestPath = True
-                break
-
-    return jsonify({'updatedGraph': graph.to_dict()})
+    # Return path and visited order for client-side animation
+    return jsonify({'path': path, 'visited': visited})
 
 
 

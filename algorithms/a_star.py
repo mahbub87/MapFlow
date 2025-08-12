@@ -18,10 +18,15 @@ def a_star(graph, start_id, end_id):
     heappush(open_list, (f_score[start_id], start_id))
     open_set.add(start_id)
 
+    visited_order = []
+
     while open_list:
         # Pop the node with the lowest f_score
         _, current_node = heappop(open_list)
         open_set.remove(current_node)
+
+        # Record visitation when node is expanded/finalized
+        visited_order.append(current_node)
 
         if current_node == end_id:
             # Reconstruct and return the path
@@ -29,7 +34,7 @@ def a_star(graph, start_id, end_id):
             while current_node is not None:
                 path.insert(0, current_node)
                 current_node = came_from[current_node]
-            return path
+            return path, visited_order
 
         # Mark the current node as processed
         closed_set.add(current_node)
@@ -53,7 +58,7 @@ def a_star(graph, start_id, end_id):
                     heappush(open_list, (f_score[neighbor], neighbor))
                     open_set.add(neighbor)
 
-    return None  # No path found
+    return None, visited_order  # No path found
 
 def heuristic(graph, node_id, end_id):
     # Heuristic: straight-line distance between nodes

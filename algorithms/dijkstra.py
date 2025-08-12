@@ -6,9 +6,16 @@ def dijkstra(graph, start_id, end_id):
     distances = {node_id: float('inf') for node_id in graph.nodes}  # Use node_id as key
     distances[start_id] = 0
     came_from = {node_id: None for node_id in graph.nodes}  # Tracks the path
+    visited_order = []  # Order in which nodes are finalized (popped)
 
     while pq:
         current_distance, current_node = heappop(pq)
+
+        # Skip if this is an outdated queue entry
+        if current_distance > distances[current_node]:
+            continue
+
+        visited_order.append(current_node)
 
         # Early exit if we've reached the target node
         if current_node == end_id:
@@ -32,4 +39,4 @@ def dijkstra(graph, start_id, end_id):
     while current is not None:
         path.insert(0, current)
         current = came_from[current]
-    return path
+    return path, visited_order

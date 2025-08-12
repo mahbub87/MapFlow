@@ -3,9 +3,11 @@ from collections import deque
 def bfs(graph, start_id, end_id):
     queue = deque([start_id])
     came_from = {node: None for node in graph.nodes}
+    visited_order = []
 
     while queue:
         current_node = queue.popleft()
+        visited_order.append(current_node)
 
         if current_node == end_id:
             # Reconstruct path
@@ -13,7 +15,7 @@ def bfs(graph, start_id, end_id):
             while current_node is not None:
                 path.insert(0, current_node)
                 current_node = came_from[current_node]
-            return path
+            return path, visited_order
 
         for edge in graph.nodes[current_node].edges:
             neighbor = edge.node2.id if edge.node1.id == current_node else edge.node1.id
@@ -21,4 +23,4 @@ def bfs(graph, start_id, end_id):
                 came_from[neighbor] = current_node
                 queue.append(neighbor)
 
-    return None  # No path found
+    return None, visited_order  # No path found
