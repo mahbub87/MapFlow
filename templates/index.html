@@ -28,7 +28,9 @@
         timer: null,
         raf: null,
         _visitedSet: new Set(),
-        nodesPerFrame: 0,
+        baseNodesPerFrame: 0,
+        // Speed multiplier is derived from slider display value v: internal = v * 0.1
+        speedMultiplier: 0.1,   // default at slider 1.0x => internal 0.1 (half of previous 0.2)
         glow: new Map(),        // nodeId -> intensity [0..1]
         lastTs: 0,
         glowDecayPerSec: 3.0,   // higher = faster fade
@@ -37,16 +39,41 @@
         pathRaf: null,
         pathLastTs: 0,
         pathGlowIntensity: 0,
-        pathDecayPerSec: 0.5    // slow fade for final path
+    pathDecayPerSec: 0.5,   // slow fade for final path
+    // lightning flash state (map-wide bloom)
+    flashActive: false,
+    flashRaf: null,
+    flashLastTs: 0,
+    flashGlowIntensity: 0,
+    flashDecayPerSec: 3.0,
+    flashCenter: { x: 0, y: 0 }
     };
     // Spatial index for fast hover
     let grid = null; let cellSize = 24; let gridCols = 0, gridRows = 0, gridMinX = 0, gridMinY = 0;
+    // Pre-rendered base layer (edges + tiny node dots) for big maps
+    let baseLayerCanvas = null;
+    let baseLayerBitmap = null; // ImageBitmap for fast blit when supported
+    // Glow layers (low-res) and sprite for fast rendering
+    const glowScale = 1.5; // render glow at half resolution for speed
+    let glowStatCanvas = null, glowStatCtx = null; // persistent faint glows
+    let glowDynCanvas = null, glowDynCtx = null;   // dynamic bright glows
+    let glowSprite = null; // radial gradient sprite
 
     function sendCity(city) {
         currentCity = city;
         selectedNodes = [];
         hoveredNode = null;
         pathNodes = [];
+        // Clear any existing animation and glow when changing city
+        stopAnimation(true);
+        // reset base layer (will rebuild after load)
+        baseLayerCanvas = null; baseLayerBitmap = null;
+        // reset glow layers
+        buildGlowLayers();
+        const overlay = document.getElementById('loadingOverlay');
+        const loadingText = document.getElementById('loadingText');
+        if (loadingText) loadingText.textContent = `Loading ${city}…`;
+        if (overlay) overlay.classList.add('show');
 
         fetch('/get_city', {
             method: 'POST',
@@ -60,12 +87,45 @@
             precomputePositions();
             buildUniqueEdges();
             buildSpatialIndex();
-            drawGraph();
+            buildBaseLayer().then(() => drawGraph());
             updateHUD();
+            if (overlay) overlay.classList.remove('show');
         })
         .catch(error => {
             console.error('Error:', error);
+            if (loadingText) loadingText.textContent = `Failed to load ${city}`;
+            setTimeout(() => overlay && overlay.classList.remove('show'), 1200);
         });
+    }
+
+    // Build low-res glow canvases and sprite
+    function buildGlowLayers() {
+        const w = Math.max(2, Math.floor((canvas ? canvas.width : 0) * glowScale));
+        const h = Math.max(2, Math.floor((canvas ? canvas.height : 0) * glowScale));
+        glowStatCanvas = document.createElement('canvas');
+        glowStatCanvas.width = w; glowStatCanvas.height = h;
+        glowStatCtx = glowStatCanvas.getContext('2d');
+        glowDynCanvas = document.createElement('canvas');
+        glowDynCanvas.width = w; glowDynCanvas.height = h;
+        glowDynCtx = glowDynCanvas.getContext('2d');
+        // clear
+        glowStatCtx.clearRect(0,0,w,h);
+        glowDynCtx.clearRect(0,0,w,h);
+        glowSprite = createGlowSprite(64);
+    }
+
+    function createGlowSprite(size) {
+        const off = document.createElement('canvas');
+        off.width = size; off.height = size;
+        const g = off.getContext('2d');
+        const cx = size/2, cy = size/2, r = size/2;
+        const grad = g.createRadialGradient(cx, cy, 0, cx, cy, r);
+        grad.addColorStop(0.0, 'rgba(220, 240, 255, 1)');
+        grad.addColorStop(0.35, 'rgba(120, 200, 255, 0.45)');
+        grad.addColorStop(1.0, 'rgba(120, 200, 255, 0)');
+        g.fillStyle = grad;
+        g.beginPath(); g.arc(cx, cy, r, 0, 2*Math.PI); g.fill();
+        return off;
     }
 
 
@@ -117,6 +177,33 @@
         }
     }
 
+    // Build pre-rendered base layer for heavy static content
+    async function buildBaseLayer() {
+        if (!graph) { baseLayerCanvas = null; baseLayerBitmap = null; return; }
+        baseLayerBitmap = null;
+        const off = document.createElement('canvas');
+        off.width = canvas.width;
+        off.height = canvas.height;
+        const octx = off.getContext('2d');
+    // Edges (slightly brighter neon-blue for readability)
+    octx.lineWidth = 0.12;
+    octx.strokeStyle = 'rgba(90, 160, 255, 0.38)';
+        octx.beginPath();
+        for (let i = 0; i < uniqueEdges.length; i++) {
+            const { n1, n2 } = uniqueEdges[i];
+            const p1 = nodePos[n1];
+            const p2 = nodePos[n2];
+            octx.moveTo(p1.x, p1.y);
+            octx.lineTo(p2.x, p2.y);
+        }
+        octx.stroke();
+        // Do not draw base node dots; only edges for a clean initial map
+        baseLayerCanvas = off;
+        if (window.createImageBitmap) {
+            try { baseLayerBitmap = await createImageBitmap(off); } catch (_) { baseLayerBitmap = null; }
+        }
+    }
+
     // Build grid index over node positions for fast nearest lookup
     function buildSpatialIndex() {
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -148,26 +235,67 @@
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // Draw base edges once (thin)
-        ctx.save();
-        ctx.lineWidth = 0.1;
-        ctx.strokeStyle = 'dimgray';
-        ctx.beginPath();
-        for (let i = 0; i < uniqueEdges.length; i++) {
-            const { n1, n2 } = uniqueEdges[i];
-            const p1 = nodePos[n1];
-            const p2 = nodePos[n2];
-            ctx.moveTo(p1.x, p1.y);
-            ctx.lineTo(p2.x, p2.y);
+        // Draw pre-rendered base layer (edges + base node dots)
+        if (baseLayerBitmap) {
+            ctx.drawImage(baseLayerBitmap, 0, 0);
+        } else if (baseLayerCanvas) {
+            ctx.drawImage(baseLayerCanvas, 0, 0);
+        } else {
+            // Fallback to direct draw (first frame before base builds)
+            ctx.save();
+            ctx.lineWidth = 0.12;
+            ctx.strokeStyle = 'rgba(90, 160, 255, 0.38)';
+            ctx.beginPath();
+            for (let i = 0; i < uniqueEdges.length; i++) {
+                const { n1, n2 } = uniqueEdges[i];
+                const p1 = nodePos[n1];
+                const p2 = nodePos[n2];
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+            }
+            ctx.stroke();
+            ctx.restore();
         }
-        ctx.stroke();
-        ctx.restore();
+
+        // Composite glow layers (persistent + dynamic) in lighter mode
+        if (glowStatCanvas && glowDynCanvas) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.imageSmoothingEnabled = true;
+            ctx.drawImage(glowStatCanvas, 0, 0, canvas.width, canvas.height);
+            ctx.drawImage(glowDynCanvas, 0, 0, canvas.width, canvas.height);
+            ctx.restore();
+        }
+
+        // Lightning-like flash overlay after final path found
+        if (anim.flashActive && anim.flashGlowIntensity > 0) {
+            const c = anim.flashCenter || { x: canvas.width/2, y: canvas.height/2 };
+            const maxR = Math.hypot(Math.max(c.x, canvas.width - c.x), Math.max(c.y, canvas.height - c.y));
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            // Large radial gradient from center fading to edges
+            const g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, maxR);
+            const a0 = Math.min(0.5, 0.15 + 0.5 * anim.flashGlowIntensity);
+            const a1 = Math.max(0, a0 * 0.35);
+            g.addColorStop(0.0, `rgba(200, 220, 255, ${a0})`);
+            g.addColorStop(0.35, `rgba(120, 180, 255, ${a1})`);
+            g.addColorStop(1.0, 'rgba(120, 180, 255, 0)');
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(c.x, c.y, maxR, 0, 2*Math.PI);
+            ctx.fill();
+            // Subtle uniform lift to ensure whole map lights up a bit
+            ctx.globalAlpha = 0.08 * anim.flashGlowIntensity;
+            ctx.fillStyle = '#bcd6ff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.restore();
+        }
 
     // Draw returned path as a single polyline (not during animation)
     if (!anim.playing && pathNodes && pathNodes.length > 1) {
             ctx.save();
             ctx.lineWidth = 1.5;
-            ctx.strokeStyle = 'gold';
+            ctx.strokeStyle = 'rgba(180, 210, 255, 0.9)';
             ctx.beginPath();
             const first = nodePos[pathNodes[0]];
             ctx.moveTo(first.x, first.y);
@@ -183,9 +311,9 @@
                 ctx.save();
                 ctx.globalCompositeOperation = 'lighter';
                 ctx.lineWidth = 2 + 6 * anim.pathGlowIntensity;
-                ctx.strokeStyle = `rgba(255, 215, 0, ${Math.min(0.9, 0.35 + 0.55 * anim.pathGlowIntensity)})`;
-                ctx.shadowColor = 'rgba(255, 215, 0, 1)';
-                ctx.shadowBlur = 12 + 28 * anim.pathGlowIntensity;
+                ctx.strokeStyle = `rgba(160, 200, 255, ${Math.min(0.9, 0.35 + 0.55 * anim.pathGlowIntensity)})`;
+                ctx.shadowColor = 'rgba(120, 180, 255, 1)';
+                ctx.shadowBlur = 14 + 34 * anim.pathGlowIntensity;
                 ctx.beginPath();
                 const f2 = nodePos[pathNodes[0]];
                 ctx.moveTo(f2.x, f2.y);
@@ -198,59 +326,66 @@
             }
         }
 
-        // Subtle glow overlay for recently visited nodes (during animation)
-        if (anim.playing && anim.glow && anim.glow.size > 0) {
+    // Removed per-node gradient glow drawing; now handled via glow layers above
+        // Overlay for selected/hovered nodes (draw larger circles)
+        ctx.save();
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 0.5;
+        const drawNodeOverlay = (nodeId, color) => {
+            const pos = nodePos[nodeId];
+            if (!pos) return;
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, 3, 0, 2 * Math.PI);
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.stroke();
+        };
+        // Selected nodes with neon-blue glows and gradient bloom
+        if (selectedNodes[0]) {
             ctx.save();
-            ctx.globalCompositeOperation = 'lighter';
-            for (const [nid, intensity] of anim.glow.entries()) {
-                const pos = nodePos[nid];
-                if (!pos) continue;
-                const r = 2 + 5 * intensity;
-                ctx.beginPath();
-                // Orange glow to match node color (darkorange)
-                ctx.fillStyle = `rgba(255, 140, 0, ${Math.min(0.55, 0.18 + 0.32 * intensity)})`;
-                ctx.arc(pos.x, pos.y, r, 0, 2 * Math.PI);
-                ctx.fill();
+            ctx.shadowColor = 'rgba(120, 200, 255, 0.9)';
+            ctx.shadowBlur = 14;
+            drawNodeOverlay(selectedNodes[0], 'rgba(80, 200, 255, 0.95)');
+            // Selected bloom: draw sprite once
+            const p = nodePos[selectedNodes[0]];
+            if (p && glowSprite) {
+                ctx.globalCompositeOperation = 'lighter';
+                const r = 8;
+                ctx.globalAlpha = 0.6;
+                ctx.drawImage(glowSprite, p.x - r, p.y - r, r*2, r*2);
+                ctx.globalAlpha = 1;
             }
             ctx.restore();
         }
-
-        // Draw nodes
-    ctx.save();
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 0.5;
-    for (let nodeId in graph.nodes) {
-            const pos = nodePos[nodeId];
-            let radius = 0.05; // default small dot
-
-            // During animation, slightly enlarge visited nodes
-            if (anim.playing && anim.index > 0) {
-                if (anim._visitedSet.has(String(nodeId))) {
-                    radius = 1.5;
-                }
+        if (selectedNodes[1]) {
+            ctx.save();
+            ctx.shadowColor = 'rgba(150, 210, 255, 0.9)';
+            ctx.shadowBlur = 14;
+            drawNodeOverlay(selectedNodes[1], 'rgba(190, 225, 255, 0.95)');
+            const p2 = nodePos[selectedNodes[1]];
+            if (p2 && glowSprite) {
+                ctx.globalCompositeOperation = 'lighter';
+                const r2 = 8;
+                ctx.globalAlpha = 0.6;
+                ctx.drawImage(glowSprite, p2.x - r2, p2.y - r2, r2*2, r2*2);
+                ctx.globalAlpha = 1;
             }
-
-            if (selectedNodes.includes(nodeId)) {
-                radius = 3;
-            } else if (hoveredNode === nodeId && selectedNodes.length < 2) {
-                radius = 3;
-            }
-
-            ctx.beginPath();
-            ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI);
-
-            if (selectedNodes[0] === nodeId) {
-                ctx.fillStyle = 'green';
-            } else if (selectedNodes[1] === nodeId) {
-                ctx.fillStyle = 'red';
-            } else {
-                ctx.fillStyle = 'darkorange';
-            }
-
-            ctx.fill();
-            ctx.stroke();
+            ctx.restore();
         }
-    ctx.restore();
+        if (hoveredNode && !selectedNodes.includes(hoveredNode)) {
+            drawNodeOverlay(hoveredNode, 'rgb(100, 180, 255)');
+            const ph = nodePos[hoveredNode];
+            if (ph && glowSprite) {
+                ctx.save();
+                ctx.globalCompositeOperation = 'lighter';
+                ctx.globalAlpha = 0.35;
+                const rh = 6;
+                ctx.drawImage(glowSprite, ph.x - rh, ph.y - rh, rh*2, rh*2);
+                ctx.globalAlpha = 1;
+                ctx.restore();
+            }
+        }
+        ctx.restore();
     }
 
     function findClosestNode(x, y) {
@@ -311,7 +446,7 @@
     }
 
     function resetSelection() {
-        stopAnimation();
+        stopAnimation(true); // also clear persistent glow on reset
         selectedNodes = [];
         hoveredNode = null;
         pathNodes = [];
@@ -319,12 +454,17 @@
     updateHUD();
     }
 
-    function stopAnimation() {
+    function stopAnimation(clearGlow = false) {
         anim.playing = false;
         anim.queue = [];
         anim.index = 0;
         anim._visitedSet = new Set();
-        anim.glow = new Map();
+        if (clearGlow) {
+            anim.glow = new Map(); // clear set
+            // also clear glow layers to remove any residual bloom
+            if (glowDynCtx && glowDynCanvas) glowDynCtx.clearRect(0,0,glowDynCanvas.width, glowDynCanvas.height);
+            if (glowStatCtx && glowStatCanvas) glowStatCtx.clearRect(0,0,glowStatCanvas.width, glowStatCanvas.height);
+        }
         if (anim.timer) {
             clearInterval(anim.timer);
             anim.timer = null;
@@ -343,17 +483,18 @@
     }
 
     function startAnimation(visited, finalPath) {
-        stopAnimation();
+    stopAnimation(false);
         anim.playing = true;
         anim.queue = (visited || []).map(String);
         anim.index = 0;
         anim._visitedSet = new Set();
-        anim.glow = new Map();
+    anim.glow = new Map(); // still used for selection logic; not drawn per-node
         anim.lastTs = 0;
+    anim.frameStamps = [];
 
-        // Compute how many nodes to consume per frame to finish quickly (~0.5s)
-        const total = anim.queue.length || 1;
-        anim.nodesPerFrame = Math.max(50, Math.ceil(total / 30)); // ~30 frames
+    // Base nodes per frame aims for ~0.5s; actual rate = base * speedMultiplier
+    const total = anim.queue.length || 1;
+    anim.baseNodesPerFrame = Math.max(50, Math.ceil(total / 30));
 
         const step = (ts) => {
             if (!anim.playing) return;
@@ -361,31 +502,31 @@
             const dt = Math.max(0, (ts - anim.lastTs) / 1000);
             anim.lastTs = ts;
 
-            // Consume a batch this frame
-            const end = Math.min(anim.index + anim.nodesPerFrame, anim.queue.length);
+            // Consume a batch this frame using current speed multiplier
+            const nodesThisFrame = Math.max(1, Math.ceil((anim.baseNodesPerFrame || 1) * (anim.speedMultiplier || 1)));
+            const end = Math.min(anim.index + nodesThisFrame, anim.queue.length);
             for (let i = anim.index; i < end; i++) {
                 const id = anim.queue[i];
                 anim._visitedSet.add(id);
-                anim.glow.set(id, 1.0); // new discovery glows bright
+                anim.glow.set(id, 1.0);
+                const p = nodePos[id];
+                if (p) anim.frameStamps.push(p);
             }
             anim.index = end;
 
-            // Decay existing glow intensities
-            if (anim.glow.size > 0 && dt > 0) {
-                const factor = Math.exp(-anim.glowDecayPerSec * dt);
-                for (const [nid, val] of Array.from(anim.glow.entries())) {
-                    const nv = val * factor;
-                    if (nv < 0.03) anim.glow.delete(nid);
-                    else anim.glow.set(nid, nv);
-                }
-            }
+            // Update glow layers: fade dynamic, stamp new nodes to both layers
+            updateGlowLayers(dt);
 
             drawGraph();
 
             if (anim.index >= anim.queue.length) {
-                // Done: stop animation and show only final path
-                stopAnimation();
+                // Done: stop animation and show only final path (remove node glow entirely)
+                stopAnimation(true);
                 pathNodes = (finalPath || []).map(String);
+                // compute flash center and trigger a short lightning-like bloom
+                const c = computePathCenter();
+                anim.flashCenter = c;
+                startMapFlash();
                 startPathGlow();
                 drawGraph();
                 return;
@@ -395,6 +536,42 @@
         };
 
         anim.raf = requestAnimationFrame(step);
+    }
+
+    function updateGlowLayers(dt) {
+        if (!glowDynCtx || !glowStatCtx || !glowSprite) return;
+        const w = glowDynCanvas.width, h = glowDynCanvas.height;
+        // Fade dynamic layer
+        const fade = Math.exp(-4.0 * (dt || 0)); // tune for trail length
+        glowDynCtx.save();
+        glowDynCtx.globalCompositeOperation = 'destination-in';
+        glowDynCtx.globalAlpha = fade;
+        glowDynCtx.fillStyle = 'rgba(0,0,0,1)';
+        glowDynCtx.fillRect(0, 0, w, h);
+        glowDynCtx.restore();
+
+        // Stamp new nodes
+        if (anim.frameStamps && anim.frameStamps.length) {
+            glowDynCtx.save();
+            glowStatCtx.save();
+            glowDynCtx.globalCompositeOperation = 'lighter';
+            glowStatCtx.globalCompositeOperation = 'lighter';
+            for (const p of anim.frameStamps) {
+                const sx = Math.floor(p.x * glowScale);
+                const sy = Math.floor(p.y * glowScale);
+                    const rDyn = 3;  // dynamic bright radius (smaller for tighter glow)
+                    const rStat = 1.5; // persistent faint radius (smaller)
+                // dynamics
+                glowDynCtx.globalAlpha = 0.8;
+                glowDynCtx.drawImage(glowSprite, sx - rDyn, sy - rDyn, rDyn*2, rDyn*2);
+                // persistent faint
+                glowStatCtx.globalAlpha = 0.22;
+                glowStatCtx.drawImage(glowSprite, sx - rStat, sy - rStat, rStat*2, rStat*2);
+            }
+            glowDynCtx.restore();
+            glowStatCtx.restore();
+            anim.frameStamps.length = 0;
+        }
     }
 
     function startPathGlow() {
@@ -423,6 +600,42 @@
         };
 
         anim.pathRaf = requestAnimationFrame(stepPath);
+    }
+
+    function computePathCenter() {
+        if (!pathNodes || pathNodes.length === 0) return { x: canvas.width/2, y: canvas.height/2 };
+        let sx = 0, sy = 0, n = 0;
+        for (let i = 0; i < pathNodes.length; i++) {
+            const p = nodePos[pathNodes[i]];
+            if (!p) continue;
+            sx += p.x; sy += p.y; n++;
+        }
+        if (n === 0) return { x: canvas.width/2, y: canvas.height/2 };
+        return { x: sx / n, y: sy / n };
+    }
+
+    function startMapFlash() {
+        anim.flashActive = true;
+        anim.flashGlowIntensity = 1.0;
+        anim.flashLastTs = 0;
+        if (anim.flashRaf) cancelAnimationFrame(anim.flashRaf);
+        const stepFlash = (ts) => {
+            if (!anim.flashActive) return;
+            if (!anim.flashLastTs) anim.flashLastTs = ts;
+            const dt = Math.max(0, (ts - anim.flashLastTs) / 1000);
+            anim.flashLastTs = ts;
+            const factor = Math.exp(-anim.flashDecayPerSec * dt);
+            anim.flashGlowIntensity *= factor;
+            if (anim.flashGlowIntensity < 0.02) {
+                anim.flashActive = false;
+                anim.flashGlowIntensity = 0;
+                drawGraph();
+                return;
+            }
+            drawGraph();
+            anim.flashRaf = requestAnimationFrame(stepFlash);
+        };
+        anim.flashRaf = requestAnimationFrame(stepFlash);
     }
 
     function findPath(algorithm) {
@@ -467,7 +680,9 @@
     document.addEventListener('DOMContentLoaded', () => {
         canvas = document.querySelector('canvas');
         ctx = canvas.getContext('2d');
-        function resizeCanvas() {
+    // Prepare glow layers immediately
+    buildGlowLayers();
+    function resizeCanvas() {
             const topbar = document.querySelector('.topbar');
             const topbarHeight = topbar ? topbar.offsetHeight : 0;
             canvas.width = window.innerWidth;
@@ -476,7 +691,7 @@
                 precomputePositions();
                 buildUniqueEdges();
                 buildSpatialIndex();
-                drawGraph();
+                buildBaseLayer().then(() => { buildGlowLayers(); drawGraph(); });
             }
         }
         window.addEventListener('resize', resizeCanvas);
@@ -484,6 +699,22 @@
         canvas.addEventListener('click', handleCanvasClick);
         canvas.addEventListener('mousemove', handleMouseMove);
         updateHUD();
+
+        // Speed slider wiring
+    const speedSlider = document.getElementById('speedSlider');
+    const speedLabel = document.getElementById('speedLabel');
+        if (speedSlider) {
+            const updateSpeed = () => {
+        const v = parseFloat(speedSlider.value || '1') || 1;
+        // Map display value to internal multiplier: 1x => 0.1 (half of old 0.2x)
+        anim.speedMultiplier = v * 0.1;
+        if (speedLabel) speedLabel.textContent = `${v.toFixed(1)}x`;
+            };
+        // Initialize defaults: 1.0x
+        try { speedSlider.value = '1'; } catch (_) {}
+            speedSlider.addEventListener('input', updateSpeed);
+            updateSpeed();
+        }
     });
     </script>
 </head>
@@ -507,6 +738,11 @@
                 <button class="CButton small" onclick="findPath('bi')">Bidirectional</button>
             </div>
             <div class="group">
+                <span class="label">Speed:</span>
+                <input id="speedSlider" type="range" min="0.1" max="3" step="0.1" value="1" />
+                <span id="speedLabel" class="label">1.0x</span>
+            </div>
+            <div class="group">
                 <button class="CButton small accent" onclick="resetSelection()">Reset</button>
             </div>
         </div>
@@ -514,7 +750,11 @@
     <div class="hud">
         <span id="hudCity">City: -</span>
         <span id="hudSel">Start: -, End: -</span>
-        <span id="hudHover">Hover: -</span>
+    </div>
+    <!-- Loading overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="spinner"></div>
+        <div id="loadingText" class="loading-text">Loading…</div>
     </div>
     <canvas></canvas>
 </body>

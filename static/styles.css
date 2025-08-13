@@ -1,6 +1,6 @@
 body {
     font-family: Courier New, serif;
-    background-color: #24292f;
+    background-color: #0b0e14; /* near-black */
     margin: 0;
     padding: 0;
 }
@@ -134,8 +134,8 @@ h1 {
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    background: #1f242a;
-    border-bottom: 1px solid #3a3f45;
+    background: #0d1117;
+    border-bottom: 1px solid #1f2a38;
     padding: 8px 12px;
 }
 .topbar .brand a {
@@ -163,7 +163,7 @@ h1 {
     font-size: 0.9rem;
 }
 .CButton.accent {
-    border-color: #00d1b2;
+    border-color: #5aa2ff;
 }
 .hud {
     position: sticky;
@@ -172,10 +172,41 @@ h1 {
     display: flex;
     gap: 1rem;
     padding: 6px 12px;
-    color: #cbd5e1;
+    color: #9fb7ff;
     font-size: 0.85rem;
 }
 canvas {
     display: block;
     margin: 6px auto 0;
+}
+
+/* Loading overlay */
+.loading-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 8, 13, 0.6);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    z-index: 2000;
+}
+.loading-overlay.show {
+    display: flex;
+}
+.spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid rgba(255, 255, 255, 0.2);
+    border-top-color: #6aa6ff; /* blue */
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+.loading-text {
+    margin-top: 12px;
+    color: #cfe2ff;
+    font-size: 0.95rem;
+}
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }
