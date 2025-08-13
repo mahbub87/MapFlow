@@ -1,0 +1,21 @@
+# Ignore caches, metadata, and large dev files from deployment
+__pycache__/
+**/__pycache__/**
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dll
+*.dylib
+*.dist-info/**
+*.egg-info/**
+*.ipynb
+*.md
+.git/**
+.vscode/**
+.idea/**
+.DS_Store
+Thumbs.db
+node_modules/**
+# If data gets large, consider moving it or selectively include only needed cities
+# data/**

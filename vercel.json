@@ -2,11 +2,6 @@
   "builds": [
     { "src": "main.py", "use": "@vercel/python" }
   ],
-  "functions": {
-    "main.py": {
-      "excludeFiles": "{**/__pycache__/**,**/*.pyc,**/*.pyo,**/*.dist-info/**,**/*.egg-info/**,**/*.ipynb,**/*.md,**/.git/**}"
-    }
-  },
   "routes": [
     { "src": "/.*", "dest": "main.py" }
   ]
