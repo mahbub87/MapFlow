@@ -647,7 +647,8 @@
         const payload = {
             start_id: selectedNodes[0],
             end_id: selectedNodes[1],
-            algorithm: algorithm
+            algorithm: algorithm,
+            city: currentCity || undefined
         };
 
         fetch('/pathfind', {
