@@ -559,8 +559,8 @@
             for (const p of anim.frameStamps) {
                 const sx = Math.floor(p.x * glowScale);
                 const sy = Math.floor(p.y * glowScale);
-                    const rDyn = 3;  // dynamic bright radius (smaller for tighter glow)
-                    const rStat = 1.5; // persistent faint radius (smaller)
+                    const rDyn = 4;  // dynamic bright radius (smaller for tighter glow)
+                    const rStat = 2; // persistent faint radius (smaller)
                 // dynamics
                 glowDynCtx.globalAlpha = 0.8;
                 glowDynCtx.drawImage(glowSprite, sx - rDyn, sy - rDyn, rDyn*2, rDyn*2);
