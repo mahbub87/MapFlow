@@ -720,6 +720,27 @@
     </script>
 </head>
 <body>
+        <!-- Minimalistic instructions modal -->
+        <div id="instructions-modal" style="
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(15,18,30,0.92); color: #fff; z-index: 9999;
+            display: flex; align-items: center; justify-content: center; flex-direction: column;
+            font-family: 'Segoe UI', Arial, sans-serif; font-size: 1.15rem; letter-spacing: 0.02em;">
+            <div style="background: rgba(25,30,45,0.98); padding: 2.2em 2.5em; border-radius: 14px; box-shadow: 0 2px 24px #0007; text-align: center;">
+                <h2 style="margin-bottom: 1em; font-size: 1.3em; font-weight: 500;">How to use</h2>
+                <ul style="list-style: none; padding: 0; margin: 0 0 1.2em 0;">
+                    <li>1. <b>Click a map button</b> to load a city.</li>
+                    <li>2. <b>Click two points</b> on the map to select start and end.</li>
+                    <li>3. <b>Click an algorithm</b> to visualize the pathfinding.</li>
+                </ul>
+                <button id="close-instructions" style="
+                    background: #2a3b6e; color: #fff; border: none; border-radius: 6px;
+                    padding: 0.6em 1.4em; font-size: 1em; cursor: pointer; box-shadow: 0 1px 6px #0003;">
+                    Got it!
+                </button>
+            </div>
+        </div>
+
     <div class="topbar">
         <div class="brand"><a href="{{ url_for('index') }}">MapFlow</a></div>
         <div class="controls">
@@ -758,5 +779,14 @@
         <div id="loadingText" class="loading-text">Loading…</div>
     </div>
     <canvas></canvas>
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const modal = document.getElementById('instructions-modal');
+            const closeBtn = document.getElementById('close-instructions');
+            closeBtn.onclick = function() {
+                modal.style.display = 'none';
+            };
+        });
+        </script>
 </body>
 </html>
